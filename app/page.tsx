@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useSession, useUser } from '@clerk/nextjs'
 import { createClient } from '@supabase/supabase-js'
 
@@ -7,46 +7,42 @@ export default function Home() {
   const [tasks, setTasks] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [name, setName] = useState('')
-  // The `useUser()` hook will be used to ensure that Clerk has loaded data about the logged in user
+
+  // The `useUser()` hook ensures that Clerk has loaded data about the logged-in user
   const { user } = useUser()
-  // The `useSession()` hook will be used to get the Clerk session object
+  // The `useSession()` hook gets the Clerk session object
   const { session } = useSession()
 
-  // Create a custom supabase client that injects the Clerk Supabase token into the request headers
-  function createClerkSupabaseClient() {
+  // Create a Supabase client using useMemo to ensure it only runs once per session change
+  const client = useMemo(() => {
+    if (!session) return null
+
     return createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_KEY!,
       {
         global: {
-          // Get the custom Supabase token from Clerk
           fetch: async (url, options = {}) => {
-            const clerkToken = await session?.getToken({
+            const clerkToken = await session.getToken({
               template: 'supabase',
             })
 
-            // Insert the Clerk Supabase token into the headers
             const headers = new Headers(options?.headers)
             headers.set('Authorization', `Bearer ${clerkToken}`)
 
-            // Now call the default fetch
             return fetch(url, {
               ...options,
               headers,
             })
           },
         },
-      },
+      }
     )
-  }
+  }, [session]) // Re-create the client only when `session` changes
 
-  // Create a `client` object for accessing Supabase data using the Clerk token
-  const client = createClerkSupabaseClient()
 
-  // This `useEffect` will wait for the User object to be loaded before requesting
-  // the tasks for the signed in user
   useEffect(() => {
-    if (!user) return
+    if (!user || !client) return
 
     async function loadTasks() {
       setLoading(true)
@@ -56,19 +52,21 @@ export default function Home() {
     }
 
     loadTasks()
-  }, [user])
+  }, [user, client]) // Ensure `client` is included so it waits for initialization
 
-  // Add a task into the "tasks" database
   async function createTask(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    if (!client) return
+
     await client.from('tasks').insert({
       name,
     })
     window.location.reload()
   }
 
-  // Update a task when its completed
   async function onCheckClicked(taskId: number, isDone: boolean) {
+    if (!client) return
+
     await client
       .from('tasks')
       .update({
@@ -78,8 +76,9 @@ export default function Home() {
     window.location.reload()
   }
 
-  // Delete a task from the database
   async function deleteTask(taskId: number) {
+    if (!client) return
+
     await client.from('tasks').delete().eq('id', taskId)
     window.location.reload()
   }
@@ -93,7 +92,7 @@ export default function Home() {
       {!loading &&
         tasks.length > 0 &&
         tasks.map((task: any) => (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div key={task.id} style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
             <input
               type="checkbox"
               checked={task.is_done}
